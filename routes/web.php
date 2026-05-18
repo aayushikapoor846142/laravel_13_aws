@@ -22,3 +22,20 @@ require __DIR__.'/auth.php';
 Auth::routes();
 
 Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name('home');
+
+// Support Knowledge Base Routes
+use App\Http\Controllers\SupportKnowledgeBaseController;
+
+Route::prefix('support')->name('support.')->group(function () {
+    Route::get('/', [SupportKnowledgeBaseController::class, 'index'])->name('index');
+    Route::post('/ask', [SupportKnowledgeBaseController::class, 'ask'])->name('ask');
+    Route::post('/feedback/{queryId}', [SupportKnowledgeBaseController::class, 'feedback'])->name('feedback');
+    Route::get('/category/{category}', [SupportKnowledgeBaseController::class, 'category'])->name('category');
+    Route::get('/article/{id}', [SupportKnowledgeBaseController::class, 'show'])->name('article');
+    
+    // Admin routes
+    Route::middleware('auth')->group(function () {
+        Route::post('/articles', [SupportKnowledgeBaseController::class, 'storeArticle'])->name('articles.store');
+        Route::get('/analytics', [SupportKnowledgeBaseController::class, 'analytics'])->name('analytics');
+    });
+});
