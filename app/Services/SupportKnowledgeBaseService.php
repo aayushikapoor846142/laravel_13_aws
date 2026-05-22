@@ -9,13 +9,13 @@ use Illuminate\Support\Facades\Log;
 
 class SupportKnowledgeBaseService
 {
-    private $apiKey;
-    private $apiUrl;
+    private $ollamaUrl;
+    private $model;
 
     public function __construct()
     {
-        $this->apiKey = config('services.openai.api_key');
-        $this->apiUrl = config('services.openai.api_url', 'https://api.openai.com/v1');
+        $this->ollamaUrl = config('services.ollama.api_url');
+        $this->model = config('services.ollama.model');
     }
 
     /**
@@ -35,29 +35,47 @@ class SupportKnowledgeBaseService
     }
 
     /**
-     * Generate embedding
+     * Generate embedding using Ollama
      */
     private function generateEmbedding(string $text): array
     {
         try {
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->apiKey,
-                'Content-Type' => 'application/json',
-            ])->timeout(30)->post($this->apiUrl . '/embeddings', [
-                'model' => 'text-embedding-ada-002',
-                'input' => $text,
+            $response = Http::timeout(120)->post($this->ollamaUrl . '/api/embeddings', [
+                'model' => $this->model,
+                'prompt' => $text,
             ]);
 
             if ($response->successful()) {
-                return $response->json()['data'][0]['embedding'];
+                return $response->json()['embedding'];
             }
 
-            Log::error('Embedding failed', ['response' => $response->body()]);
-            return [];
+            Log::warning('Ollama embedding failed, using fallback', ['response' => $response->body()]);
+            return $this->generateSimpleEmbedding($text);
         } catch (\Exception $e) {
-            Log::error('Embedding error: ' . $e->getMessage());
-            return [];
+            Log::warning('Ollama not available, using fallback: ' . $e->getMessage());
+            return $this->generateSimpleEmbedding($text);
         }
+    }
+
+    /**
+     * Fallback: Simple embedding using TF-IDF-like approach
+     */
+    private function generateSimpleEmbedding(string $text): array
+    {
+        $words = str_word_count(strtolower($text), 1);
+        $embedding = array_fill(0, 384, 0.0);
+        
+        foreach ($words as $i => $word) {
+            $hash = crc32($word) % 384;
+            $embedding[$hash] += 1.0;
+        }
+        
+        $magnitude = sqrt(array_sum(array_map(fn($x) => $x * $x, $embedding)));
+        if ($magnitude > 0) {
+            $embedding = array_map(fn($x) => $x / $magnitude, $embedding);
+        }
+        
+        return $embedding;
     }
 
     /**
@@ -79,7 +97,9 @@ class SupportKnowledgeBaseService
                 $articleEmbedding = json_decode($article->embedding, true);
                 $similarity = $this->cosineSimilarity($queryEmbedding, $articleEmbedding);
                 
-                if ($similarity > 0.7) { // Only include relevant articles
+                Log::info("Article: {$article->title}, Similarity: {$similarity}");
+                
+                if ($similarity > 0.3) { // Lowered threshold for better matching
                     $results[] = [
                         'article' => $article,
                         'similarity' => $similarity
@@ -101,11 +121,13 @@ class SupportKnowledgeBaseService
         $dotProduct = 0;
         $mag1 = 0;
         $mag2 = 0;
+        
+        $minLength = min(count($vec1), count($vec2));
 
-        for ($i = 0; $i < count($vec1); $i++) {
-            $dotProduct += $vec1[$i] * $vec2[$i];
-            $mag1 += $vec1[$i] ** 2;
-            $mag2 += $vec2[$i] ** 2;
+        for ($i = 0; $i < $minLength; $i++) {
+            $dotProduct += ($vec1[$i] ?? 0) * ($vec2[$i] ?? 0);
+            $mag1 += ($vec1[$i] ?? 0) ** 2;
+            $mag2 += ($vec2[$i] ?? 0) ** 2;
         }
 
         $magnitude = sqrt($mag1) * sqrt($mag2);
@@ -160,38 +182,39 @@ class SupportKnowledgeBaseService
     }
 
     /**
-     * Generate answer using GPT
+     * Generate answer using Ollama
      */
     private function generateAnswer(string $question, string $context): string
     {
         try {
-            $systemPrompt = "You are a helpful customer support assistant. Answer questions based ONLY on the provided knowledge base articles. Be concise, friendly, and professional. If the context doesn't contain enough information, say so.";
-            
-            $userPrompt = "Knowledge Base:\n{$context}\n\nCustomer Question: {$question}\n\nProvide a helpful answer:";
+            $prompt = "You are a helpful customer support assistant. Answer the question based ONLY on the provided knowledge base articles. Be concise, friendly, and professional.\n\nKnowledge Base:\n{$context}\n\nCustomer Question: {$question}\n\nAnswer:";
 
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->apiKey,
-                'Content-Type' => 'application/json',
-            ])->timeout(30)->post($this->apiUrl . '/chat/completions', [
-                'model' => 'gpt-3.5-turbo',
-                'messages' => [
-                    ['role' => 'system', 'content' => $systemPrompt],
-                    ['role' => 'user', 'content' => $userPrompt]
-                ],
-                'temperature' => 0.7,
-                'max_tokens' => 500
+            $response = Http::timeout(120)->post($this->ollamaUrl . '/api/generate', [
+                'model' => $this->model,
+                'prompt' => $prompt,
+                'stream' => false,
             ]);
 
             if ($response->successful()) {
-                return $response->json()['choices'][0]['message']['content'];
+                return $response->json()['response'];
             }
 
-            Log::error('Answer generation failed', ['response' => $response->body()]);
-            return "I'm having trouble generating an answer right now. Please try again.";
+            Log::warning('Ollama answer generation failed', ['response' => $response->body()]);
+            return $this->generateFallbackAnswer($question, $context);
         } catch (\Exception $e) {
-            Log::error('Answer generation error: ' . $e->getMessage());
-            return "An error occurred. Please contact support.";
+            Log::warning('Ollama not available: ' . $e->getMessage());
+            return $this->generateFallbackAnswer($question, $context);
         }
+    }
+
+    /**
+     * Fallback answer without LLM
+     */
+    private function generateFallbackAnswer(string $question, string $context): string
+    {
+        // Extract first 500 chars from most relevant article
+        $excerpt = substr($context, 0, 500);
+        return "Based on our knowledge base:\n\n" . $excerpt . "\n\n(Note: AI assistant is currently unavailable. Showing relevant article excerpt.)";
     }
 
     /**

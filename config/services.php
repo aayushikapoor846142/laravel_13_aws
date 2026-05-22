@@ -35,9 +35,9 @@ return [
         ],
     ],
 
-    'openai' => [
-        'api_key' => env('OPENAI_API_KEY'),
-        'api_url' => env('OPENAI_API_URL', 'https://api.openai.com/v1'),
+    'ollama' => [
+        'api_url' => env('OLLAMA_API_URL', 'http://localhost:11434'),
+        'model' => env('OLLAMA_MODEL', 'llama3'),
     ],
 
 ];
