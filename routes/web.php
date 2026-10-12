@@ -1,7 +1,9 @@
 <?php
 
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\AnalyzeController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\SupportKnowledgeBaseController;
 
 Route::get('/', function () {
     return view('welcome');
@@ -16,6 +18,7 @@ Route::middleware('auth')->group(function () {
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
+Route::post('/analyze', AnalyzeController::class);
 
 require __DIR__.'/auth.php';
 
@@ -24,7 +27,6 @@ Auth::routes();
 Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name('home');
 
 // Support Knowledge Base Routes
-use App\Http\Controllers\SupportKnowledgeBaseController;
 
 Route::prefix('support')->name('support.')->group(function () {
     Route::get('/', [SupportKnowledgeBaseController::class, 'index'])->name('index');
